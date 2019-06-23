@@ -1,4 +1,4 @@
-// This file contains the start-up code, sampling instructions and general use cases for the GY-521
+ // This file contains the start-up code, sampling instructions and general use cases for the GY-521
 // IMU device. The connection between the Arduino and the IMU is made using I2C. 
 
 // Created: 18 May 2019
@@ -6,68 +6,137 @@
 // Version Number: 1.0
 
 #include <Wire.h>
+#include <Adafruit_Sensor.h>
+#include <Adafruit_BNO055.h>
+// #include <utility/imumaths.h>
+// #include <math.h>
+#include <SD.h>
 
-// Environment Variables
-const int MPU_ADDR = 0x68; // I2c address of the MPU-6050. If AD0 pin is set to high, the I2C
-                           // address will be 0x69
-int16_t accelerometer_x; // x-axis acceleration
-int16_t accelerometer_y; // y-axis acceleration
-int16_t accelerometer_z; // z-axis acceleration
-int16_t gyro_x;          // x-axis gyroscope measurement
-int16_t gyro_y;          // y-axis gyroscope measurement
-int16_t gyro_z;          // z-axis gyroscope measurement
-int16_t temperature;     // temperature in fahrenheit
+Adafruit_BNO055 bno = Adafruit_BNO055(28);
 
-char tmp_str[7]; // Used to conert byte to string
+const int chipSelect = 10;
 
-char* convert_int16_to_str(int16_t i) {
-  sprintf(tmp_str, "%6d", i);
-  return tmp_str;
-}
+//*********************************** SD CARD PRESETUP ************************
+
+char filename[] = "meas_00.txt";
+void increment_filename(char[]);
 
 void setup() {
+
+  // Open serial communications and wait for port to open
   Serial.begin(9600);
-  Wire.begin();
-  Wire.beginTransmission(MPU_ADDR); // Begins a transmission to the I2C slave (GY-521 board)
-  Wire.write(0x6B); // PWR_MGMT_1 register
-  Wire.write(0); // set to zero (wakes up the MPU-6050)
-  Wire.endTransmission(true);
+  while(!Serial) {
+    ; // Wait for serial port to connect
+  }
+
+  if(!bno.begin())
+  {
+    Serial.print("Ooops, no BN0055 detected --- Check your wiring or I2C address!");
+    while(1);
+  }
+
+  delay(1000);
+
+  bno.setExtCrystalUse(true);
+
+  // ******************************* SD CARD SETUP ***********************************
+  Serial.print("Initializing SD card...");
+
+  // see if the card is present and can be initialized:
+  if (!SD.begin(chipSelect)) {
+    Serial.println("Card failed, or not present");
+    // don't do anything more:
+    while (1);
+  }
+  Serial.println("card initialized.");
+
+  // Check if a previous file existed. If it does, then increment the next file name
+  // Increment the file name
+  Serial.println(filename);
+  while (SD.exists(filename)) {
+    increment_filename(filename);
+    Serial.print("The new filename is: ");
+    Serial.println(filename);
+  }
+
+  // Inform the user that data is being logged.
+  Serial.println("Begin logging data");
 }
 
 void loop() {
-  Wire.beginTransmission(MPU_ADDR);
-  Wire.write(0x3B); // starting with register 0x3B (ACCEL_XOUT_H) [MPU-6000 and MPU-6050 Register Map and Descriptions Revision 4.2, p.40]
-  Wire.endTransmission(false); // the parameter indicates that the Arduino will send a restart. As a result, the connection is kept active.
-  Wire.requestFrom(MPU_ADDR, 7*2, true); // request a total of 7*2=14 registers
   
-  // "Wire.read()<<8 | Wire.read();" means two registers are read and stored in the same variable
-  accelerometer_x = Wire.read()<<8 | Wire.read(); // reading registers: 0x3B (ACCEL_XOUT_H) and 0x3C (ACCEL_XOUT_L)
-  accelerometer_y = Wire.read()<<8 | Wire.read(); // reading registers: 0x3D (ACCEL_YOUT_H) and 0x3E (ACCEL_YOUT_L)
-  accelerometer_z = Wire.read()<<8 | Wire.read(); // reading registers: 0x3F (ACCEL_ZOUT_H) and 0x40 (ACCEL_ZOUT_L)
-  temperature = Wire.read()<<8 | Wire.read(); // reading registers: 0x41 (TEMP_OUT_H) and 0x42 (TEMP_OUT_L)
-  gyro_x = Wire.read()<<8 | Wire.read(); // reading registers: 0x43 (GYRO_XOUT_H) and 0x44 (GYRO_XOUT_L)
-  gyro_y = Wire.read()<<8 | Wire.read(); // reading registers: 0x45 (GYRO_YOUT_H) and 0x46 (GYRO_YOUT_L)
-  gyro_z = Wire.read()<<8 | Wire.read(); // reading registers: 0x47 (GYRO_ZOUT_H) and 0x48 (GYRO_ZOUT_L)
+  imu::Vector<3> linear_accel = bno.getVector(Adafruit_BNO055::VECTOR_LINEARACCEL);
+  imu::Vector<3> angular_veloc = bno.getVector(Adafruit_BNO055::VECTOR_GYROSCOPE);
+  
+  // ************************* CONVERT DATA FOR SD WRITE **************************
+  
+  // IMU CONVERSION
+  String acceleration_of_x = String(linear_accel.x());
+  String acceleration_of_y = String(linear_accel.y());
+  String acceleration_of_z = String(linear_accel.z());
+  String angular_of_x = String(angular_veloc.x());
+  String angular_of_y = String(angular_veloc.y());
+  String angular_of_z = String(angular_veloc.z());
+  // String convert_temp = (temperature/340.00)+36.53;
 
-  // This code will be changed to a function that will send the data directly back to the Pi
+  String imu_label = "IMU";
+  String ax_label = "aX";
+  String ay_label = "aY";
+  String az_label = "aZ";
+  String gx_label = "gX";
+  String gy_label = "gY";
+  String gz_label = "gZ";
+
+  // Set up data string for entry onto SD card
+  String dataString = "";
+
+  dataString = "{"+imu_label+":{"+ax_label+": " + acceleration_of_x + ", " + ay_label + ": "+ acceleration_of_y + ", "+ az_label+": " + acceleration_of_z + ", "+ gx_label +": "+ angular_of_x +", "+ gy_label +":"+ angular_of_y +", "+ gz_label +": "+ angular_of_z +" }}";
   
-  // print out data
-  Serial.print("aX = "); Serial.print(convert_int16_to_str(accelerometer_x));
-  Serial.print(" | aY = "); Serial.print(convert_int16_to_str(accelerometer_y));
-  Serial.print(" | aZ = "); Serial.print(convert_int16_to_str(accelerometer_z));
-  // the following equation was taken from the documentation [MPU-6000/MPU-6050 Register Map and Description, p.30]
-  Serial.print(" | tmp = "); Serial.print((temperature/340.00)+36.53);
-  Serial.print(" | gX = "); Serial.print(convert_int16_to_str(gyro_x));
-  Serial.print(" | gY = "); Serial.print(convert_int16_to_str(gyro_y));
-  Serial.print(" | gZ = "); Serial.print(convert_int16_to_str(gyro_z));
-  Serial.println();
+  // Serial.println(dataString);
+
+  // Record data to the SD Card file
+  // Open file to save collected data
+  File dataFile = SD.open(filename, FILE_WRITE);
+
+  if(dataFile) {
+    dataFile.println(dataString);
+    dataFile.close();
+  }
+  else {
+    Serial.println("File failed to open!!");
+  }
   
   // This sets the number of times that data is read.
+  // Currently, this is 10 Hz
   delay(100);
+} // main
 
-}
+// This function increments the filename to ensure that any previously existing record files
+// will not be overwritten until they are transferred to the databse.
+//
+// Return Type: void
+//
+// Variables:
+//    filename  -Character Array- The filename of the file that is stored on the SD card
 
-// Function Declarations
-void send_data_to_pi() {
+void increment_filename(char filename[])
+{
+  int updated_ones;
+  int updated_tens;
   
-}
+  int tens_place = filename[5];
+  int ones_place = filename[6];
+
+  if(ones_place == 9)
+  {
+    updated_ones = ones_place + 1;
+    updated_tens = tens_place + 1;
+    filename[5] = updated_tens;
+    filename[6] = updated_ones;
+  }
+  else
+  {
+    updated_ones = ones_place + 1;
+    filename[6] = updated_ones;
+  }
+} // increment_filename
